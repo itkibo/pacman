@@ -1,0 +1,41 @@
+﻿[
+    {
+        "path":  ".\\log",
+        "ext":  "log",
+        "days":  31,
+        "comment":  "this is minimal config: arc=true, del=true, single=false by default"
+    },
+    {
+        "arc":  false,
+        "path":  ".\\log",
+        "del":  true,
+        "ext":  "zip",
+        "days":  186,
+        "comment":  "remove files older than 186 days (bundle mode)"
+    },
+    {
+        "arc":  true,
+        "path":  ".\\log",
+        "del":  true,
+        "ext":  "log",
+        "days":  93,
+        "comment":  "compress files older than 93 days + remove source files"
+    },
+    {
+        "arc":  true,
+        "path":  ".\\log",
+        "del":  true,
+        "ext":  "log",
+        "days":  31,
+        "single":  true,
+        "comment":  "compress files older than 31 days one by one + remove source files (single mode)"
+    },
+    {
+        "arc":  false,
+        "path":  ".\\log",
+        "del":  false,
+        "ext":  "log",
+        "days":  365,
+        "comment":  "this task will be skipped due params: arc=false, del=false (nothing to do)"
+    }
+]
