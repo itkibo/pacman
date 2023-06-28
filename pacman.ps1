@@ -18,33 +18,36 @@
 
 .NOTES
     Parameters:
-        > path, ext, days are mandatory
-        > arc=true, del=true, single=false (if not explicitly specified)
+        > path, filter, days are mandatory
+        > arc=true, del=true, single=false are optional with defaults
 
-    Start point of datetime for calculating "old files" is {today date 00:00:00}
-    It means if days=0, script processes all files with dt < {today date 00:00:00}
+    Filter allowes * and ? wildcards.
+
+    If days=0, script processes all files with dt < {tomorrow date 00:00:00}.
+    If days=1, script processes all files with dt < {today date 00:00:00}.
 
     Result archive file has naming patterns:
-        > bundle: "{yyyyMMdd_hhmmss}_{filescountinbundle}.zip"
-        > single: "{yyyyMMdd_hhmmss}_{sourcefilename}.zip"
+        > bundle: "{yyyyMMdd_HHmmss}_{filescountinbundle}{marker}.zip"
+        > single: "{yyyyMMdd_HHmmss}_{sourcefilename}{marker}.zip"
         
 .EXAMPLE
     Config file content example (json):    
     [
         {
             "path":  ".\\log",
-            "ext":  "log",
+            "filter":  "*.log",
             "days":  31,
-            "comment":  "this is minimal config: arc=true, del=true, single=false by default"
+            "comment":  "bundle mode (compress + remove source files, by default arc=true, del=true, single=false)"
         },
         {
             "arc":  true,
             "path":  ".\\log",
             "del":  true,
-            "ext":  "log",
+            "filter":  "????_*.log",
             "days":  31,
             "single":  true,
-            "comment":  "single mode (compress files older than 31 days + remove source files) one by one"
+            "marker":  "@PACMAN",
+            "comment":  "single mode (compress files separately + mark archive + remove source files)"
         }
     ]
 #>
@@ -60,18 +63,19 @@ param(
 function validate_params {
     [CmdletBinding()]
     param(
-        [string]$path,              # folder where files to process are located
-        [string]$ext,               # filter files by extension
+        [string]$path,              # folder where source files located
+        [string]$filter,            # filter to get source files
         [string]$days,              # get files older than N days
-        [bool]$arc = $true,         # compressing enabled
-        [bool]$del = $true,         # removing enabled
-        [bool]$single = $false,     # compress each file separately
-        [string]$comment            # comment for a task
+        [bool]$arc = $true,         # files compressing enabled
+        [bool]$del = $true,         # files removing enabled
+        [bool]$single = $false,     # compress and|or delete each file separately
+        [string]$marker,            # archive file name marker
+        [string]$comment            # task comment
     )
 
     
-    # parameters should be not empty + not null + not spaces
-    foreach ($arg in @($path, $ext, $days)) {
+    # parameters should be not empty + not null + not whitespace
+    foreach ($arg in @($path, $filter, $days)) {
         if ($arg -match "^\s*$") { 
             Write-Error "incorrect external config values"
             return $false
@@ -79,14 +83,20 @@ function validate_params {
     }
     
     # days are integer >=0
-    if (!($days -match "^\d+$") -or !([int]$days -ge 0)) { 
+    if (-not($days -match "^\d+$" -and [int]$days -ge 0)) { 
         Write-Error "wrong days value"
         return $false
     }
 
-    # check file extension format
-    if (-not($ext -match "^\w{1,4}$")) { 
-        Write-Error "wrong file extension"
+    # filter format: alphanumeric + some special symbols
+    if (-not($filter -match "^[\w\*\?\.\ \-\@]+$")) {     
+        Write-Error "wrong file filter"
+        return $false 
+    }
+
+    # marker format: alphanumeric allowed or empty string
+    if (-not($marker -match "^[\w\-\@]+$" -or $marker -match "^\s*$")) { 
+        Write-Error "only alphanumeric allowed in marker"
         return $false 
     }
 
@@ -101,18 +111,50 @@ function validate_params {
 } # end validate_params
 
 
+function get_files {
+    param(
+        [string]$path,    # archive destination folder
+        [string]$filter,  # files filter
+        [int]$days        # get files older than N of days
+    )
+
+    
+    $days = [int]$days
+
+    # calc example -1day:
+    # start point of calculating dt is today 00:00:00
+    # today 00:00:00 + (1-1day) = today 00:00:00
+    # get all files with dt less than today 00:00:00
+    $limit_date = (Get-Date).Date.AddDays(1-$days)
+
+    @(
+        "get files $path\$filter older than $days days",
+        "< $($limit_date.ToString('dd.MM.yyyy HH:mm:ss'))"
+    ) | Write-Host
+    
+    return Get-ChildItem -Path $path -Filter $filter -File | Where-Object {$_.LastWriteTime -lt $limit_date}
+
+}  # end get_files
+
+
 function compress_bundle {
     <#
+        bundle mode:
         compress all files into one archive and|or delete files
         returns path to archive if success
     #>
     param(
-        $files,         # source files
-        [string]$path   # archive destination folder
+        $files,             # source files
+        [string]$path,      # archive destination folder
+        [string]$marker     # archive file name marker
     )
 
 
-    $arc_path = "{0}\{1}_{2}.zip" -f $path, (Get-Date).ToString('yyyyMMdd_hhmmss'), $files.count
+    if ($marker) {
+        $arc_path = "{0}\{1}_{2}{3}.zip" -f $path, (Get-Date).ToString('yyyyMMdd_HHmmss'), $files.count, $marker
+    } else {
+        $arc_path = "{0}\{1}_{2}.zip" -f $path, (Get-Date).ToString('yyyyMMdd_HHmmss'), $files.count
+    }
 
     try {
         $files | Compress-Archive -DestinationPath $arc_path -CompressionLevel Fastest
@@ -131,20 +173,26 @@ function compress_bundle {
 
 function compress_or_remove_single {
     <#
+        single mode:
         compress and|or delete each file separately
         returns true if no errors
     #>
     param(
-        $files,         # source files
-        [string]$path,  # archive destination folder 
-        [bool]$arc,     # compress files
-        [bool]$del      # delete files
+        $files,             # source files
+        [string]$path,      # archive destination folder 
+        [bool]$arc,         # compress files enable
+        [bool]$del,         # delete files enable
+        [string]$marker     # archive file name marker
     )
 
 
     foreach ($one_file in $files) {
 
-        $arc_path = "{0}\{1}_{2}.zip" -f $path, (Get-Date).ToString('yyyyMMdd_hhmmss'), $one_file.Name
+        if ($marker) {
+            $arc_path = "{0}\{1}_{2}{3}.zip" -f $path, (Get-Date).ToString('yyyyMMdd_HHmmss'), $one_file.Name, $marker
+        } else {
+            $arc_path = "{0}\{1}_{2}.zip" -f $path, (Get-Date).ToString('yyyyMMdd_HHmmss'), $one_file.Name
+        }    
 
         if ($arc -eq $true) {
             try {
@@ -175,11 +223,12 @@ function process_task {
     [CmdletBinding()]
     param(
         [string]$path,
-        [string]$ext,
+        [string]$filter,
         [string]$days,
         [bool]$arc = $true,
         [bool]$del = $true,
         [bool]$single = $false,
+        [string]$marker,
         [string]$comment
     )
 
@@ -192,16 +241,11 @@ function process_task {
         return $true
     }
 
-    # calc limit date (time of a day always 00:00:00)
-    $days = [int]$days
-    $limit_date = (Get-Date).AddDays(-$days).Date
-
-    Write-Host "get files $path\*.$ext with dt < $($limit_date.ToString('dd.MM.yyyy HH:mm:ss')) (-$days days)"
-    $files = Get-ChildItem -Path $path -Filter "*.$ext" -File | Where-Object {$_.LastWriteTime -lt $limit_date}
-
-    # if no files detected, skip current task
-    if ($files.count -eq 0) { 
-        Write-Host "no files *.$ext detected to process, skip task"
+    # get files
+    if (($files = get_files -path $path -filter $filter -days $days).count -gt 0) {
+        Write-Host "$($files.count) files detected"
+    } else {
+        Write-Host "no files catched, skip task"
         return $true
     }
 
@@ -209,11 +253,11 @@ function process_task {
     if ($single -eq $true) {
 
         # compress and|or remove
-        if (compress_or_remove_single -files $files -path $path -arc $arc -del $del) {
+        if (compress_or_remove_single -files $files -path $path -arc $arc -del $del -marker $marker) {
             if ($arc -eq $true) { Write-Host "success! $($files.count) files compressed separately"}
-            if ($del -eq $true) { Write-Host "done! $($files.count) files removed" }
+            if ($del -eq $true) { Write-Host "done! $($files.count) files removed"}
         } else {
-            Write-Error "can not compress or remove *.$ext files"
+            Write-Error "can not compress or remove $filter files"
             return $false    
         }
 
@@ -224,10 +268,10 @@ function process_task {
 
         # compress
         if ($arc -eq $true) {
-            if ($arc_path = compress_bundle -files $files -path $path) {
+            if ($arc_path = compress_bundle -files $files -path $path -marker $marker) {
                 Write-Host "done! $($files.count) files compressed into $arc_path"
             } else {
-                Write-Error "can not compress *.$ext files"
+                Write-Error "can not compress $filter files"
                 return $false
             }
         }  # end if
@@ -237,7 +281,7 @@ function process_task {
             try {
                 $files | Remove-Item
             } catch {
-                Write-Error "can not remove *.$ext files"
+                Write-Error "can not remove $filter files"
                 return $false
             }
             Write-Host "done! $($files.count) files removed successfully"
@@ -277,7 +321,7 @@ try {
 # iterate over tasks in config
 for($i = 0; $i -lt $config.Count; $i++) {
 
-    Write-Host(">"*4 + " task $($i + 1)/$($config.Count)")
+    Write-Host("--- " + "task $($i + 1)/$($config.Count)" + " ---")
 
     # hashtable needed for args splatting
     $task_params = @{}
