@@ -1,20 +1,39 @@
 # P.A.C.M.A.N
-> Script for compressing and removing files by rules
+> Compress and | or delete files by mask older than N days  
 
-It performs tasks from configuration file  
-Works in two modes:  
-+ bundle - processes all files all together (default mode)
-+ single - processes each file separately (uses for large size files)
+Script performs tasks from configuration file.
+It works in two modes: 
++ **`bundle`** default mode  
+   processes files all together  
+   result = one zip file `{yyyyMMdd_HHmmss}_{filescountinbundle}{marker}.zip`
+  
++ **`single`** for compressing large size files  
+  processes each file separately   
+  result = one zip per each source file `{yyyyMMdd_HHmmss}_{sourcefilename}{marker}.zip`)  
+
+## Running
+```
+# it takes start parameters from default config path .\config.txt
+.\pacman.ps1
+
+# or specify config file
+.\pacman -config_path .\configs\config.json
+```
+
+## Config rules
++ Config file contains array of dictionaries
++ Each element of the array is a task
++ Script processes tasks in same order as in config
++ Params `arc, del, single` may not be specified in config, default values used: `arc=true, del=true, single=false`
++ Params `path, filter, days` are mandatory
++ The `filter` parameter is used for both compression and deletion
++ Filter allowes `*` and `?` wildcards
++ If `days=0`, script processes all files with `dt < {tomorrow date 00:00:00}`
++ If `days=1`, script processes all files with `dt < {today date 00:00:00}`
++ If a critical error occured while checking parameters or performing task, the script stops and exit
 
 ## config example .json
 ```json
-# Config file contains array of dictionaries
-# Each element of the array is a task
-# Script processes tasks in same order as in config
-# Params arc, del, single may not be specified in config, default values used: arc=true, del=true, single=false
-# The filtering parameter is used for compression and deletion jobs
-# If a critical error occured while checking parameters or performing task, the script stops and exit
-
 [
     {
         "path":  ".\\log",
